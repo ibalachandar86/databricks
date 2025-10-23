@@ -1,0 +1,107 @@
+Excellent — you’re essentially asking:
+
+“In PySpark, can I trigger multiple child Python scripts (like separate .py files) from a master Python script using ThreadPoolExecutor, where each behaves like dbutils.notebook.run() — i.e., runs independently, in parallel, and returns success/failure messages?”
+
+✅ Yes, you can absolutely do this — but you need to be clear whether:
+
+all scripts run inside the same Spark session (driver), or
+you want to run them as independent subprocesses (like separate notebook runs).
+Let’s cover both cases 👇
+
+🧩 OPTION 1: Run child scripts as subprocesses (closest to dbutils.notebook.run)
+This approach truly simulates dbutils.notebook.run() — each child .py file runs in its own Python process, isolated from the master.
+You can parallelize them using ThreadPoolExecutor.
+
+✅ Example Structure
+/Shared/
+ ├── master_program.py
+ ├── child_script_1.py
+ ├── child_script_2.py
+🧠 master_program.py
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def run_child(script_name, args=None):
+    """
+    Run a child python script as a subprocess and capture its output
+    """
+    cmd = ["python", script_name]
+    if args:
+        cmd.extend(args)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return (script_name, "SUCCESS", result.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        return (script_name, "FAILED", e.stderr.strip())
+
+# List of child scripts with parameters
+child_jobs = [
+    ("child_script_1.py", ["paramA", "123"]),
+    ("child_script_2.py", ["paramB", "456"]),
+]
+
+results = []
+with ThreadPoolExecutor(max_workers=2) as executor:
+    futures = [executor.submit(run_child, s, a) for s, a in child_jobs]
+    for f in as_completed(futures):
+        results.append(f.result())
+
+for r in results:
+    print(f"Script: {r[0]} | Status: {r[1]} | Message: {r[2]}")
+🧠 child_script_1.py
+import sys
+import time
+
+param1 = sys.argv[1]
+param2 = sys.argv[2]
+
+print(f"Child script started with params: {param1}, {param2}")
+time.sleep(2)  # Simulate processing
+print("Child script finished successfully.")
+✅ Output
+Script: child_script_1.py | Status: SUCCESS | Message: Child script started with params: paramA, 123 ...
+Script: child_script_2.py | Status: SUCCESS | Message: Child script started with params: paramB, 456 ...
+⚙️ Notes
+Each subprocess runs independently (like dbutils.notebook.run()).
+You can capture both stdout and stderr.
+Works fine on Databricks if .py scripts are in DBFS or local driver path.
+🧩 OPTION 2: Run functions inside the same Spark session (shared context)
+If you want to parallelize ETL functions (not separate files), you can define a function and submit it with threads.
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def run_child_task(task_name):
+    print(f"Starting task {task_name}")
+    df = spark.range(1000000).withColumnRenamed("id", task_name)
+    count = df.count()
+    return f"Task {task_name} processed {count} records"
+
+tasks = ["A", "B", "C"]
+
+with ThreadPoolExecutor(max_workers=3) as executor:
+    futures = [executor.submit(run_child_task, t) for t in tasks]
+    for f in as_completed(futures):
+        print(f.result())
+✅ Advantages:
+
+All threads share the same SparkSession.
+Good for light parallelism (metadata-driven orchestration).
+⚠️ Caution: Spark actions (.count(), .show()) are thread-safe but will queue jobs; true Spark parallelism happens inside the cluster, not via Python threads.
+
+🧩 OPTION 3: Hybrid — call child .py scripts using Databricks REST API
+If you’re in Databricks and want to mimic dbutils.notebook.run() fully, you can trigger Python scripts (or notebooks) as Databricks jobs using the REST API.
+
+That gives:
+
+Parallel isolation
+Job tracking
+Cluster management
+Return values
+(Equivalent to what dbutils.notebook.run() does but from Python.)
+
+🧠 Summary Table
+Goal	Approach	Runs in same SparkSession?	Parallel?	Isolation
+Simulate dbutils.run() behavior	subprocess.run() inside ThreadPool	❌	✅	✅
+Run Python functions in parallel	ThreadPoolExecutor on functions	✅	⚠️ (light)	❌
+Production-level parallel notebook/script orchestration	Databricks REST API / Jobs API	❌	✅	✅✅
+Would you like me to show a metadata-driven version of Option 1 — where the master reads task info from a metadata table and triggers multiple .py scripts in parallel (like ETL jobs)?
