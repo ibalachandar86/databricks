@@ -1,0 +1,101 @@
+Perfect ✅ — adding a schema comparison is a key step in PySpark unit testing to ensure that not only the data but also column names, types, and nullability match exactly.
+
+Let’s extend the earlier unit test example with schema validation.
+
+🧩 Full Example: Unit Test Comparing Schema + Data in Databricks Notebook
+from pyspark.sql import SparkSession, Row
+
+spark = SparkSession.builder.getOrCreate()
+
+# --- Step 1: Read actual dataframe from Delta table ---
+actual_df = spark.table("sales_db.sales_table")
+
+# --- Step 2: Define expected dataframe manually or from data source ---
+expected_data = [
+    Row(order_id=1, customer="Alice", amount=100.0),
+    Row(order_id=2, customer="Bob", amount=200.0)
+]
+expected_df = spark.createDataFrame(expected_data)
+
+# --- Step 3: Sort both DataFrames for deterministic comparison ---
+actual_sorted = actual_df.orderBy("order_id")
+expected_sorted = expected_df.orderBy("order_id")
+
+# --- Step 4: Define reusable assertion function ---
+def assert_df_equal(df_actual, df_expected, check_schema=True, msg="DataFrames are not equal"):
+    """
+    Compares two PySpark DataFrames for schema and data equality.
+    Raises AssertionError if mismatch is found.
+    """
+
+    # ✅ Schema check
+    if check_schema:
+        actual_fields = [(f.name, f.dataType.simpleString(), f.nullable) for f in df_actual.schema.fields]
+        expected_fields = [(f.name, f.dataType.simpleString(), f.nullable) for f in df_expected.schema.fields]
+
+        if actual_fields != expected_fields:
+            raise AssertionError(
+                f"{msg}: Schema mismatch\n"
+                f"Actual schema: {actual_fields}\nExpected schema: {expected_fields}"
+            )
+
+    # ✅ Data check
+    actual_data = df_actual.collect()
+    expected_data = df_expected.collect()
+
+    if set(actual_data) != set(expected_data):
+        diff_actual = [r for r in actual_data if r not in expected_data]
+        diff_expected = [r for r in expected_data if r not in actual_data]
+        raise AssertionError(
+            f"{msg}: Data mismatch\n"
+            f"Extra in actual: {diff_actual}\nExtra in expected: {diff_expected}"
+        )
+
+    print("✅ Test passed — schema and data are identical")
+
+# --- Step 5: Run the test ---
+assert_df_equal(actual_sorted, expected_sorted)
+🧠 What this does
+Schema comparison: Checks every column name, data type, and nullability.
+Data comparison: Compares all rows (order-independent).
+Raises a clear, readable AssertionError if mismatched.
+✅ Example Output
+✅ When success
+✅ Test passed — schema and data are identical
+❌ When schema mismatch
+AssertionError: DataFrames are not equal: Schema mismatch
+Actual schema: [('order_id', 'int', True), ('cust_name', 'string', True)]
+Expected schema: [('order_id', 'int', True), ('customer', 'string', True)]
+❌ When data mismatch
+AssertionError: DataFrames are not equal: Data mismatch
+Extra in actual: [Row(order_id=3, customer='Charlie', amount=300.0)]
+Extra in expected: []
+✅ Optional: Wrap in unittest for CI/CD
+If you want to integrate with test frameworks (like Azure DevOps or GitHub Actions):
+
+import unittest
+from pyspark.sql import Row
+
+class TestSalesTable(unittest.TestCase):
+
+    @classmethod
+    def setUpClass(cls):
+        cls.spark = SparkSession.builder.getOrCreate()
+
+    def test_sales_table_schema_and_data(self):
+        actual_df = self.spark.table("sales_db.sales_table")
+        expected_df = self.spark.createDataFrame([
+            Row(order_id=1, customer="Alice", amount=100.0),
+            Row(order_id=2, customer="Bob", amount=200.0)
+        ])
+
+        # Sort both
+        actual_sorted = actual_df.orderBy("order_id")
+        expected_sorted = expected_df.orderBy("order_id")
+
+        # Compare schema and data
+        assert_df_equal(actual_sorted, expected_sorted)
+
+if __name__ == "__main__":
+    unittest.main(argv=[''], verbosity=2, exit=False)
+Would you like me to enhance this further so it prints only mismatched columns and datatypes instead of dumping the full schema lists when differences exist (for cleaner test output)?
