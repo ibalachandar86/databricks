@@ -1,0 +1,101 @@
+
+from pyspark.sql import functions as F
+from delta.tables import DeltaTable
+
+# Example paths / tables
+target_table = "dim_customer"
+source_table = "src_data"
+
+# Load Delta tables
+df_src = spark.table(source_table)
+delta_tgt = DeltaTable.forName(spark, target_table)
+
+# Step 1: Expire changed records in target
+delta_tgt.alias("tgt") \
+    .merge(
+        df_src.alias("src"),
+        "tgt.customer_id = src.customer_id AND tgt.is_current = TRUE"
+    ) \
+    .whenMatchedUpdate(
+        condition="""
+            tgt.customer_name <> src.customer_name OR
+            tgt.address <> src.address OR
+            tgt.phone <> src.phone
+        """,
+        set={
+            "end_date": F.current_date(),
+            "is_current": F.lit(False)
+        }
+    ) \
+    .execute()
+
+
+# Identify new or changed rows
+df_active = spark.table(target_table).filter("is_current = TRUE")
+
+df_new_versions = df_src.alias("src") \
+    .join(df_active.alias("tgt"), F.col("src.customer_id") == F.col("tgt.customer_id"), "leftanti") \
+    .select(
+        "src.customer_id",
+        "src.customer_name",
+        "src.address",
+        "src.phone",
+    ) \
+    .withColumn("start_date", F.current_date()) \
+    .withColumn("end_date", F.lit(None).cast("date")) \
+    .withColumn("is_current", F.lit(True))
+
+# Append to target table
+df_new_versions.write.format("delta").mode("append").saveAsTable(target_table)
+
+----
+
+MERGE INTO dim_customer AS tgt
+USING src_data AS src
+ON tgt.customer_id = src.customer_id
+  AND tgt.is_current = TRUE
+WHEN MATCHED AND (
+      tgt.customer_name <> src.customer_name
+   OR tgt.address <> src.address
+   OR tgt.phone <> src.phone
+) THEN
+  UPDATE SET
+      tgt.end_date = current_date(),
+      tgt.is_current = FALSE;
+
+
+INSERT INTO dim_customer
+SELECT
+    src.customer_id,
+    src.customer_name,
+    src.address,
+    src.phone,
+    current_date() AS start_date,
+    NULL AS end_date,
+    TRUE AS is_current
+FROM src_data src
+LEFT JOIN dim_customer tgt
+  ON src.customer_id = tgt.customer_id
+  AND tgt.is_current = TRUE
+WHERE tgt.customer_id IS NULL;  -- only insert new or updated ones
+
+MERGE INTO dim_customer AS tgt
+USING staged_src AS src
+ON tgt.customer_id = src.customer_id AND tgt.is_current = TRUE
+
+WHEN MATCHED AND src.change_flag = 'Y' THEN
+  UPDATE SET tgt.end_date = current_date(), tgt.is_current = FALSE
+
+WHEN NOT MATCHED THEN
+  INSERT (
+    customer_id, customer_name, address, phone,
+    start_date, end_date, is_current
+  )
+  VALUES (
+    src.customer_id, src.customer_name, src.address, src.phone,
+    current_date(), NULL, TRUE
+  );
+
+++++++++++++++++++++++++++++++++
+
+
