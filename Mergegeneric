@@ -1,0 +1,116 @@
+Perfect 👍 — you’re talking about a dynamic / generic Databricks MERGE command in PySpark, where:
+
+If matched, you can apply some condition (like checking a boolean column).
+
+If not matched, it should insert all columns dynamically (no need to hardcode column names).
+
+
+Here’s exactly how to do this step-by-step 👇
+
+
+---
+
+✅ Example — Generic Dynamic MERGE in Databricks
+
+from delta.tables import DeltaTable
+from pyspark.sql import functions as F
+
+# Example setup
+target_table = "my_catalog.my_schema.my_target_table"
+source_df = df  # your source DataFrame
+
+# Define DeltaTable
+delta_table = DeltaTable.forName(spark, target_table)
+
+# Get dynamic list of columns from DataFrame
+columns = source_df.columns
+
+# Build dynamic insert clause for merge (for WHEN NOT MATCHED)
+insert_cols = ", ".join(columns)
+insert_vals = ", ".join([f"source.{c}" for c in columns])
+
+# Build update clause (for WHEN MATCHED)
+update_expr = ", ".join([f"target.{c} = source.{c}" for c in columns])
+
+# Define your merge condition — including a Boolean column check
+# e.g. match on id and only update if target.is_active = true
+merge_condition = "target.id = source.id AND target.is_active = true"
+
+# Build and execute MERGE SQL dynamically
+merge_sql = f"""
+MERGE INTO {target_table} AS target
+USING source_view AS source
+ON {merge_condition}
+WHEN MATCHED THEN
+  UPDATE SET {update_expr}
+WHEN NOT MATCHED THEN
+  INSERT ({insert_cols})
+  VALUES ({insert_vals})
+"""
+
+# Register DataFrame as temp view for SQL merge
+source_df.createOrReplaceTempView("source_view")
+
+# Execute
+spark.sql(merge_sql)
+
+
+---
+
+✅ Key Points
+
+1. Dynamic column list — automatically pulled from the DataFrame.
+
+
+2. Boolean filter — part of the ON clause (or you can move it to WHEN MATCHED AND target.is_active = true).
+
+
+3. Generic function — works for any DataFrame → no column hardcoding.
+
+
+4. Safe — Uses SQL syntax, so compatible with Unity Catalog too.
+
+
+
+
+---
+
+✅ (Optional) — As a reusable function
+
+def merge_delta_generic(source_df, target_table, merge_condition, boolean_condition_col=None):
+    delta_table = DeltaTable.forName(spark, target_table)
+    columns = source_df.columns
+
+    insert_cols = ", ".join(columns)
+    insert_vals = ", ".join([f"source.{c}" for c in columns])
+    update_expr = ", ".join([f"target.{c} = source.{c}" for c in columns])
+
+    if boolean_condition_col:
+        merge_condition += f" AND target.{boolean_condition_col} = true"
+
+    source_df.createOrReplaceTempView("source_view")
+
+    merge_sql = f"""
+    MERGE INTO {target_table} AS target
+    USING source_view AS source
+    ON {merge_condition}
+    WHEN MATCHED THEN
+      UPDATE SET {update_expr}
+    WHEN NOT MATCHED THEN
+      INSERT ({insert_cols})
+      VALUES ({insert_vals})
+    """
+
+    spark.sql(merge_sql)
+
+
+---
+
+✅ Example call
+
+merge_delta_generic(df, "my_catalog.my_schema.my_table", "target.id = source.id", "is_active")
+
+
+---
+
+Would you like me to make this function also handle SCD Type 2 logic (i.e. close old record, insert new one automatically)?
