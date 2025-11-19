@@ -114,3 +114,23 @@ merge_delta_generic(df, "my_catalog.my_schema.my_table", "target.id = source.id"
 ---
 
 Would you like me to make this function also handle SCD Type 2 logic (i.e. close old record, insert new one automatically)?
+
+
+
+from delta.tables import DeltaTable
+import time
+
+max_retries = 5
+for attempt in range(max_retries):
+    try:
+        deltaTable = DeltaTable.forPath(spark, "/path/to/table")
+        deltaTable.alias("t").merge(
+            updates.alias("u"),
+            "t.id = u.id"
+        ).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+        break
+    except Exception as e:
+        if "ConcurrentModificationException" in str(e):
+            time.sleep(2 ** attempt)
+        else:
+            raise
