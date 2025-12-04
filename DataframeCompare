@@ -1,0 +1,20 @@
+
+def compare_accounts(df1, df2, key="account_id"):
+    """
+    Compare two DataFrames based on a key column.
+    Returns: matched, unmatched_in_df1, unmatched_in_df2, all_unmatched
+    """
+
+    # Matched accounts
+    matched = df1.join(df2, on=key, how="inner")
+
+    # Accounts only in df1
+    unmatched_df1 = df1.join(df2, on=key, how="left_anti")
+
+    # Accounts only in df2
+    unmatched_df2 = df2.join(df1, on=key, how="left_anti")
+
+    # All unmatched (union of both)
+    all_unmatched = unmatched_df1.union(unmatched_df2)
+
+    return matched, unmatched_df1, unmatched_df2, all_unmatched
